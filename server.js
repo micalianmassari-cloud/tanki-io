@@ -386,7 +386,7 @@ function updateBullet(b) {
   }
   for (const n of state.npcs) {
     if (n.dead) continue;
-    if (dist(b, n) < n.radius + b.size) {
+    if (dist(b, n) < n.size + b.size) {
       n.health -= b.damage;
       n.flashTimer = 5;
       n.aggro = true; n.aggroTargetId = b.ownerId;
