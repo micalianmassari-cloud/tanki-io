@@ -14,7 +14,7 @@ const CONFIG = {
   TICK_RATE: 30,               // обновлений в секунду — выше для плавности
   PHYSICS_RATE: 60,            // физика в секунду
   BOT_COUNT: 10,               // минимальное количество ботов (если игроков мало)
-  NPC_COUNT: 50,
+  NPC_COUNT: 70,
   MAX_PLAYERS: 50,
   PLAYER_SPEED: 3.4,
   BULLET_LIFE: 95,
