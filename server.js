@@ -140,6 +140,8 @@ class Tank {
       killer.health = Math.min(killer.maxHealth, killer.health + 35);
       broadcastKill(killer.name, this.name, isPvP, killer.id, this.id);
     }
+    // СМЕРТЬ = 0 МОЩНОСТИ (для всех — и игроков, и ботов)
+    this.power = 0;
     this.respawnTimer = 200;
   }
 
@@ -409,10 +411,10 @@ function initGame() {
   state.npcs = [];
   state.bullets = [];
   state.nextId = 1;
-  for (let i = 0; i < CONFIG.BOT_COUNT; i++) spawnBot();
+  // Ботов не создаём — они спавнятся по 1 на каждого игрока
   for (let i = 0; i < CONFIG.NPC_COUNT; i++) spawnNPC();
   console.log(`[INIT] Арена создана: ${CONFIG.ARENA_SIZE}x${CONFIG.ARENA_SIZE}`);
-  console.log(`[INIT] Ботов: ${CONFIG.BOT_COUNT}, NPC: ${CONFIG.NPC_COUNT}`);
+  console.log(`[INIT] NPC: ${CONFIG.NPC_COUNT}. Ботов = игроков (динамически).`);
 }
 
 function spawnBot() {
@@ -447,17 +449,12 @@ function gameTick() {
   state.bullets = state.bullets.filter(b => !b.dead);
   while (state.npcs.length < CONFIG.NPC_COUNT) spawnNPC();
 
-  // Возрождение ботов
+  // Возрождение ботов (парные — возрождаются всегда, как и игроки по запросу)
   for (const t of state.tanks) {
     if (t.isBot && t.dead && t.respawnTimer <= 0) {
-      const liveBots = state.tanks.filter(x => x.isBot && !x.dead).length;
-      const realPlayers = state.tanks.filter(x => !x.isBot).length;
-      const neededBots = Math.max(0, CONFIG.BOT_COUNT - realPlayers);
-      if (liveBots < neededBots) t.respawn();
+      t.respawn();
     }
   }
-  // Удаление отключившихся реальных игроков (но оставляем танк на арене как бота, чтобы не было пустоты)
-  // Реальные игроки помечены ws !== null; при disconnect мы оставляем танк и переводим в бота
 }
 
 // ==================== РАССЫЛКА СОСТОЯНИЯ ====================
@@ -556,7 +553,12 @@ wss.on('connection', (ws, req) => {
   tank.ws = ws;
   state.tanks.push(tank);
 
-  console.log(`[JOIN] ${playerName} подключился. Всего игроков: ${state.tanks.filter(t => t.ws).length}`);
+  // Создаём парного бота (1 бот = 1 игрок)
+  const pairedBot = spawnBot();
+  tank.pairedBotId = pairedBot.id;
+  pairedBot.pairedPlayerId = tank.id;
+
+  console.log(`[JOIN] ${playerName} подключился. Всего игроков: ${state.tanks.filter(t => t.ws).length}. Спавн бота ${pairedBot.name}.`);
 
   // Отправляем игроку его ID
   ws.send(JSON.stringify({ type: 'welcome', id: tank.id, arena: CONFIG.ARENA_SIZE }));
@@ -582,14 +584,18 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     console.log(`[LEAVE] ${playerName} отключился`);
-    // Помечаем танк как бота и оставляем на арене (или удаляем)
-    tank.isBot = true;
-    tank.ws = null;
-    // Через 30 секунд удаляем совсем
-    setTimeout(() => {
-      const idx = state.tanks.indexOf(tank);
-      if (idx !== -1) state.tanks.splice(idx, 1);
-    }, 30000);
+    // Удаляем танк игрока сразу
+    const playerIdx = state.tanks.indexOf(tank);
+    if (playerIdx !== -1) state.tanks.splice(playerIdx, 1);
+    // Удаляем парного бота
+    if (tank.pairedBotId) {
+      const botIdx = state.tanks.findIndex(t => t.id === tank.pairedBotId);
+      if (botIdx !== -1) {
+        const bot = state.tanks[botIdx];
+        console.log(`[LEAVE] Удаляем парного бота ${bot.name}`);
+        state.tanks.splice(botIdx, 1);
+      }
+    }
   });
 
   ws.on('error', () => {});
