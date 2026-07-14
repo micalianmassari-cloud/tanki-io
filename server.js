@@ -185,6 +185,10 @@ class Tank {
         const targetVy = this.input.my * this.speed;
         this.vx = lerp(this.vx, targetVx, 0.25);
         this.vy = lerp(this.vy, targetVy, 0.25);
+        // Поворачиваем корпус в направлении движения
+        const targetAngle = Math.atan2(this.input.my, this.input.mx);
+        let diff = normAngle(targetAngle - this.angle);
+        this.angle += diff * 0.2;
       } else {
         // Затухание когда нет ввода
         this.vx *= 0.85;
