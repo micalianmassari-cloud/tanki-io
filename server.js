@@ -176,10 +176,31 @@ class Tank {
     }
     this.maxHealth = 100 + this.power * 0.3;
 
+    // Для реальных игроков — движение на основе input (mx, my)
+    // Для ботов — vx/vy уже установлены в updateBotAI()
+    if (!this.isBot) {
+      const inputMag = Math.hypot(this.input.mx, this.input.my);
+      if (inputMag > 0.05) {
+        const targetVx = this.input.mx * this.speed;
+        const targetVy = this.input.my * this.speed;
+        this.vx = lerp(this.vx, targetVx, 0.25);
+        this.vy = lerp(this.vy, targetVy, 0.25);
+      } else {
+        // Затухание когда нет ввода
+        this.vx *= 0.85;
+        this.vy *= 0.85;
+      }
+      // Башня сразу следует за прицелом (без интерполяции — для отзывчивости)
+      this.turretAngle = this.input.turretAngle;
+    }
+
     this.x += this.vx;
     this.y += this.vy;
-    this.vx *= 0.92;
-    this.vy *= 0.92;
+    // Затухание только для ботов (для игроков уже применено выше)
+    if (this.isBot) {
+      this.vx *= 0.92;
+      this.vy *= 0.92;
+    }
 
     const r = this.radius;
     if (this.x < r) { this.x = r; this.vx = Math.abs(this.vx) * 0.5; }
@@ -482,6 +503,15 @@ function broadcastKill(killerName, victimName, isPvP, killerId, victimId) {
 
 // ==================== HTTP СЕРВЕР (для health-check) ====================
 const server = http.createServer((req, res) => {
+  // CORS заголовки — разрешаем запросы с любого домена (mm05.ru)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
   if (req.url === '/health' || req.url === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -531,14 +561,11 @@ wss.on('connection', (ws, req) => {
     try {
       const msg = JSON.parse(data);
       if (msg.type === 'input') {
-        // Обновляем управление
+        // Обновляем управление (движение применится в update())
         tank.input.mx = clamp(msg.mx || 0, -1, 1);
         tank.input.my = clamp(msg.my || 0, -1, 1);
         tank.input.turretAngle = msg.turretAngle || 0;
         tank.input.shoot = !!msg.shoot;
-        // Двигаем танк на сервере (используем mx, my как направление)
-        tank.vx = lerp(tank.vx, tank.input.mx * tank.speed, 0.18);
-        tank.vy = lerp(tank.vy, tank.input.my * tank.speed, 0.18);
       } else if (msg.type === 'respawn') {
         if (tank.dead) tank.respawn();
       } else if (msg.type === 'ping') {
