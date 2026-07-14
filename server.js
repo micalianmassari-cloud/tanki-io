@@ -11,10 +11,10 @@ const http = require('http');
 const CONFIG = {
   PORT: 3000,                  // порт, который нужно открыть в фаерволе sweb.ru
   ARENA_SIZE: 5000,
-  TICK_RATE: 30,               // обновлений в секунду (рассылка клиентам)
+  TICK_RATE: 20,               // обновлений в секунду (рассылка клиентам) — оптимизация
   PHYSICS_RATE: 60,            // физика в секунду
   BOT_COUNT: 10,               // минимальное количество ботов (если игроков мало)
-  NPC_COUNT: 70,
+  NPC_COUNT: 50,
   MAX_PLAYERS: 50,
   PLAYER_SPEED: 3.4,
   BULLET_LIFE: 95,
@@ -459,30 +459,56 @@ function gameTick() {
 
 // ==================== РАССЫЛКА СОСТОЯНИЯ ====================
 function broadcastState() {
-  const payload = {
-    type: 'state',
-    arena: CONFIG.ARENA_SIZE,
-    tanks: state.tanks.map(t => ({
-      id: t.id, x: t.x, y: t.y, angle: t.angle, turretAngle: t.turretAngle,
-      name: t.name, color: t.color, health: t.health, maxHealth: t.maxHealth,
-      power: Math.floor(t.power), kills: t.kills,
-      dead: t.dead, invincible: t.invincible > 0,
-      flash: t.flashTimer > 0, isBot: t.isBot,
-    })),
-    npcs: state.npcs.map(n => ({
-      id: n.id, x: n.x, y: n.y, type: n.type, color: n.color,
-      size: n.size, sides: n.sides, angle: n.angle,
-      health: n.health, maxHealth: n.maxHealth,
-    })),
-    bullets: state.bullets.map(b => ({
-      id: b.id, x: b.x, y: b.y, color: b.color, size: b.size, ownerId: b.ownerId,
-    })),
-  };
-  const msg = JSON.stringify(payload);
-  for (const t of state.tanks) {
-    if (t.ws && t.ws.readyState === WebSocket.OPEN) {
-      t.ws.send(msg);
+  // Оптимизация: для каждого игрока отправляем только то, что в его видимой области + запас
+  const VIEW_MARGIN = 800; // запас за пределами экрана (для интерполяции)
+  for (const player of state.tanks) {
+    if (!player.ws || player.ws.readyState !== WebSocket.OPEN) continue;
+
+    // Видимая область игрока (используем его последние известные координаты)
+    const px = player.x, py = player.y;
+    // Предполагаем экран ~1400x800 + запас
+    const viewLeft = px - 700 - VIEW_MARGIN;
+    const viewRight = px + 700 + VIEW_MARGIN;
+    const viewTop = py - 400 - VIEW_MARGIN;
+    const viewBottom = py + 400 + VIEW_MARGIN;
+
+    // Фильтруем NPC по видимости
+    const visibleNpcs = [];
+    for (const n of state.npcs) {
+      if (n.x >= viewLeft && n.x <= viewRight && n.y >= viewTop && n.y <= viewBottom) {
+        visibleNpcs.push({
+          id: n.id, x: n.x, y: n.y, type: n.type, color: n.color,
+          size: n.size, sides: n.sides, angle: n.angle,
+          health: n.health, maxHealth: n.maxHealth,
+        });
+      }
     }
+
+    // Фильтруем пули по видимости
+    const visibleBullets = [];
+    for (const b of state.bullets) {
+      if (b.x >= viewLeft && b.x <= viewRight && b.y >= viewTop && b.y <= viewBottom) {
+        visibleBullets.push({
+          id: b.id, x: b.x, y: b.y, color: b.color, size: b.size, ownerId: b.ownerId,
+        });
+      }
+    }
+
+    // Танки — отправляем все (их немного, и нужно видеть врагов на миникарте)
+    const payload = {
+      type: 'state',
+      arena: CONFIG.ARENA_SIZE,
+      tanks: state.tanks.map(t => ({
+        id: t.id, x: t.x, y: t.y, angle: t.angle, turretAngle: t.turretAngle,
+        name: t.name, color: t.color, health: t.health, maxHealth: t.maxHealth,
+        power: Math.floor(t.power), kills: t.kills,
+        dead: t.dead, invincible: t.invincible > 0,
+        flash: t.flashTimer > 0, isBot: t.isBot,
+      })),
+      npcs: visibleNpcs,
+      bullets: visibleBullets,
+    };
+    player.ws.send(JSON.stringify(payload));
   }
 }
 
