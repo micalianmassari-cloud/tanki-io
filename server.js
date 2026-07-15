@@ -329,11 +329,15 @@ function spawnNPC() {
   else if (r < 0.92) type = 'drone';
   else type = 'pentagon';
   let x, y, tries = 0;
+  // Спавним ПОЗАДИ видимой зоны игроков (чтобы не появлялись резко на экране)
   do {
     x = rand(150, CONFIG.ARENA_SIZE - 150);
     y = rand(150, CONFIG.ARENA_SIZE - 150);
     tries++;
-  } while (tries < 10 && state.tanks.some(t => !t.dead && dist({x,y}, t) < 300));
+  } while (tries < 15 && (
+    state.tanks.some(t => !t.dead && dist({x,y}, t) < 500) ||
+    state.npcs.some(n => !n.dead && dist({x,y}, n) < 80)
+  ));
   const s = NPC_TYPES[type];
   state.npcs.push({
     id: nextId(),
@@ -345,6 +349,7 @@ function spawnNPC() {
     vx: rand(-0.5, 0.5), vy: rand(-0.5, 0.5),
     dead: false, flashTimer: 0,
     aggro: false, aggroTargetId: null,
+    spawnTime: Date.now(),  // для анимации появления
   });
 }
 
@@ -532,7 +537,10 @@ function gameTick() {
   // Чистка
   state.npcs = state.npcs.filter(n => !n.dead);
   state.bullets = state.bullets.filter(b => !b.dead);
-  while (state.npcs.length < CONFIG.NPC_COUNT) spawnNPC();
+  // Спавн NPC — по 1 за тик (плавно, без лагов)
+  if (state.npcs.length < CONFIG.NPC_COUNT) {
+    spawnNPC();
+  }
 
   // Возрождение ботов (парные — возрождаются всегда, как и игроки по запросу)
   for (const t of state.tanks) {
@@ -565,6 +573,7 @@ function broadcastState() {
           id: n.id, x: n.x, y: n.y, type: n.type, color: n.color,
           size: n.size, sides: n.sides, angle: n.angle,
           health: n.health, maxHealth: n.maxHealth,
+          spawnTime: n.spawnTime,
         });
       }
     }
