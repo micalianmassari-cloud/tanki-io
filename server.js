@@ -374,6 +374,88 @@ function updateNPC(n) {
   if (n.y > CONFIG.ARENA_SIZE - n.size) { n.vy = -Math.abs(n.vy); n.y = CONFIG.ARENA_SIZE - n.size; }
 }
 
+// ==================== СТОЛКНОВЕНИЯ (отскок) ====================
+// Танки сталкиваются с NPC и другими танками — отскакивают назад
+function resolveCollisions() {
+  // 1. Танк ↔ NPC
+  for (const t of state.tanks) {
+    if (t.dead) continue;
+    for (const n of state.npcs) {
+      if (n.dead) continue;
+      const dx = t.x - n.x;
+      const dy = t.y - n.y;
+      const d = Math.hypot(dx, dy);
+      const minDist = t.radius + n.size;
+      if (d < minDist && d > 0.001) {
+        // Нормализованный вектор от NPC к танку
+        const nx = dx / d;
+        const ny = dy / d;
+        // overlap — насколько они проникли друг в друга
+        const overlap = minDist - d;
+        // Танк тяжелее NPC (танк ~radius 22+, NPC 14-32) — но танк "катится" по NPC
+        // Отталкиваем танк меньше, NPC больше (танк как бы "сдвигает" NPC)
+        const tankMass = t.radius;
+        const npcMass = n.size;
+        const totalMass = tankMass + npcMass;
+        // Раздвигаем их
+        t.x += nx * overlap * (npcMass / totalMass);
+        t.y += ny * overlap * (npcMass / totalMass);
+        n.x -= nx * overlap * (tankMass / totalMass);
+        n.y -= ny * overlap * (tankMass / totalMass);
+        // Отскок — добавляем скорость вдоль нормали
+        const bounceForce = 2.5;
+        t.vx += nx * bounceForce * (npcMass / totalMass);
+        t.vy += ny * bounceForce * (npcMass / totalMass);
+        n.vx -= nx * bounceForce * (tankMass / totalMass);
+        n.vy -= ny * bounceForce * (tankMass / totalMass);
+        // NPC становится агрессивным при ударе
+        n.aggro = true;
+        n.aggroTargetId = t.id;
+      }
+    }
+  }
+
+  // 2. Танк ↔ Танк
+  for (let i = 0; i < state.tanks.length; i++) {
+    const a = state.tanks[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < state.tanks.length; j++) {
+      const b = state.tanks[j];
+      if (b.dead) continue;
+      // Не сталкиваем invincible танки (только что возродились)
+      if (a.invincible > 0 || b.invincible > 0) continue;
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const d = Math.hypot(dx, dy);
+      const minDist = a.radius + b.radius;
+      if (d < minDist && d > 0.001) {
+        const nx = dx / d;
+        const ny = dy / d;
+        const overlap = minDist - d;
+        // Масса пропорциональна размеру (мощности)
+        const massA = a.radius;
+        const massB = b.radius;
+        const totalMass = massA + massB;
+        // Раздвигаем
+        a.x += nx * overlap * (massB / totalMass);
+        a.y += ny * overlap * (massB / totalMass);
+        b.x -= nx * overlap * (massA / totalMass);
+        b.y -= ny * overlap * (massA / totalMass);
+        // Отскок — сильнее чем с NPC (реальный удар танков)
+        const bounceForce = 4;
+        a.vx += nx * bounceForce * (massB / totalMass);
+        a.vy += ny * bounceForce * (massB / totalMass);
+        b.vx -= nx * bounceForce * (massA / totalMass);
+        b.vy -= ny * bounceForce * (massA / totalMass);
+        // Лёгкий урон при таране (опционально — небольшое повреждение)
+        const ramDamage = 3;
+        a.takeDamage(ramDamage, b);
+        b.takeDamage(ramDamage, a);
+      }
+    }
+  }
+}
+
 // ==================== ПУЛИ ====================
 function updateBullet(b) {
   if (b.dead) return;
@@ -443,6 +525,9 @@ function gameTick() {
   }
   for (const n of state.npcs) updateNPC(n);
   for (const b of state.bullets) updateBullet(b);
+
+  // Столкновения (отскок) — после обновления позиций
+  resolveCollisions();
 
   // Чистка
   state.npcs = state.npcs.filter(n => !n.dead);
