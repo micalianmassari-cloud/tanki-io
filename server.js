@@ -379,104 +379,80 @@ function updateNPC(n) {
   if (n.y > CONFIG.ARENA_SIZE - n.size) { n.vy = -Math.abs(n.vy); n.y = CONFIG.ARENA_SIZE - n.size; }
 }
 
-// ==================== СТОЛКНОВЕНИЯ (отскок) с Spatial Grid ====================
-// Размер ячейки grid — должен быть больше самого большого объекта (~64)
-const GRID_CELL = 128;
-function buildSpatialGrid(items) {
-  const grid = new Map();
-  for (const item of items) {
-    if (item.dead) continue;
-    const cx = Math.floor(item.x / GRID_CELL);
-    const cy = Math.floor(item.y / GRID_CELL);
-    const key = cx + ',' + cy;
-    if (!grid.has(key)) grid.set(key, []);
-    grid.get(key).push(item);
-  }
-  return grid;
-}
-function getNearby(grid, x, y, radius) {
-  const result = [];
-  const minCx = Math.floor((x - radius) / GRID_CELL);
-  const maxCx = Math.floor((x + radius) / GRID_CELL);
-  const minCy = Math.floor((y - radius) / GRID_CELL);
-  const maxCy = Math.floor((y + radius) / GRID_CELL);
-  for (let cx = minCx; cx <= maxCx; cx++) {
-    for (let cy = minCy; cy <= maxCy; cy++) {
-      const cell = grid.get(cx + ',' + cy);
-      if (cell) result.push(...cell);
-    }
-  }
-  return result;
-}
-
+// ==================== СТОЛКНОВЕНИЯ (отскок) ====================
 // Танки сталкиваются с NPC и другими танками — отскакивают назад
 function resolveCollisions() {
-  // Строим spatial grid для NPC (их много — 70)
-  const npcGrid = buildSpatialGrid(state.npcs);
-
-  // 1. Танк ↔ NPC (только соседние NPC)
+  // 1. Танк ↔ NPC
   for (const t of state.tanks) {
     if (t.dead) continue;
-    const nearby = getNearby(npcGrid, t.x, t.y, t.radius + 35);
-    for (const n of nearby) {
+    for (const n of state.npcs) {
       if (n.dead) continue;
       const dx = t.x - n.x;
       const dy = t.y - n.y;
       const d = Math.hypot(dx, dy);
       const minDist = t.radius + n.size;
       if (d < minDist && d > 0.001) {
+        // Нормализованный вектор от NPC к танку
         const nx = dx / d;
         const ny = dy / d;
+        // overlap — насколько они проникли друг в друга
         const overlap = minDist - d;
+        // Танк тяжелее NPC (танк ~radius 22+, NPC 14-32) — но танк "катится" по NPC
+        // Отталкиваем танк меньше, NPC больше (танк как бы "сдвигает" NPC)
         const tankMass = t.radius;
         const npcMass = n.size;
         const totalMass = tankMass + npcMass;
+        // Раздвигаем их
         t.x += nx * overlap * (npcMass / totalMass);
         t.y += ny * overlap * (npcMass / totalMass);
         n.x -= nx * overlap * (tankMass / totalMass);
         n.y -= ny * overlap * (tankMass / totalMass);
+        // Отскок — добавляем скорость вдоль нормали
         const bounceForce = 2.5;
         t.vx += nx * bounceForce * (npcMass / totalMass);
         t.vy += ny * bounceForce * (npcMass / totalMass);
         n.vx -= nx * bounceForce * (tankMass / totalMass);
         n.vy -= ny * bounceForce * (tankMass / totalMass);
+        // NPC становится агрессивным при ударе
         n.aggro = true;
         n.aggroTargetId = t.id;
       }
     }
   }
 
-  // 2. Танк ↔ Танк (танков мало — обычный O(n²), но с ранним выходом)
+  // 2. Танк ↔ Танк
   for (let i = 0; i < state.tanks.length; i++) {
     const a = state.tanks[i];
     if (a.dead) continue;
     for (let j = i + 1; j < state.tanks.length; j++) {
       const b = state.tanks[j];
       if (b.dead) continue;
+      // Не сталкиваем invincible танки (только что возродились)
       if (a.invincible > 0 || b.invincible > 0) continue;
-      // Ранний выход — bounding box проверка
       const dx = a.x - b.x;
-      if (Math.abs(dx) > a.radius + b.radius) continue;
       const dy = a.y - b.y;
-      if (Math.abs(dy) > a.radius + b.radius) continue;
       const d = Math.hypot(dx, dy);
       const minDist = a.radius + b.radius;
       if (d < minDist && d > 0.001) {
         const nx = dx / d;
         const ny = dy / d;
         const overlap = minDist - d;
+        // Масса пропорциональна размеру (мощности)
         const massA = a.radius;
         const massB = b.radius;
         const totalMass = massA + massB;
+        // Раздвигаем
         a.x += nx * overlap * (massB / totalMass);
         a.y += ny * overlap * (massB / totalMass);
         b.x -= nx * overlap * (massA / totalMass);
         b.y -= ny * overlap * (massA / totalMass);
+        // Отскок — сильнее чем с NPC (реальный удар танков)
         const bounceForce = 4;
         a.vx += nx * bounceForce * (massB / totalMass);
         a.vy += ny * bounceForce * (massB / totalMass);
         b.vx -= nx * bounceForce * (massA / totalMass);
         b.vy -= ny * bounceForce * (massA / totalMass);
+        // Лёгкий урон при таране (опционально — небольшое повреждение)
         const ramDamage = 3;
         a.takeDamage(ramDamage, b);
         b.takeDamage(ramDamage, a);
@@ -545,20 +521,14 @@ function spawnBot() {
 
 // ==================== СЕРВЕРНЫЙ ТИК ====================
 let lastTick = Date.now();
-let npcTickCounter = 0;
 function gameTick() {
   const now = Date.now();
-  // Физика танков на 60 Гц (фиксированный шаг)
+  // Физика на 60 Гц (фиксированный шаг)
   for (const t of state.tanks) {
     if (t.isBot) updateBotAI(t);
     t.update();
   }
-  // NPC обновляем 20 Гц (каждый 3-й тик) — они медленные, не нужна 60 Гц
-  npcTickCounter++;
-  if (npcTickCounter % 3 === 0) {
-    for (const n of state.npcs) updateNPC(n);
-  }
-  // Пули на 60 Гц (быстрые, нужна точность)
+  for (const n of state.npcs) updateNPC(n);
   for (const b of state.bullets) updateBullet(b);
 
   // Столкновения (отскок) — после обновления позиций
@@ -587,22 +557,21 @@ function broadcastState() {
   for (const player of state.tanks) {
     if (!player.ws || player.ws.readyState !== WebSocket.OPEN) continue;
 
-    // Видимая область игрока
+    // Видимая область игрока (используем его последние известные координаты)
     const px = player.x, py = player.y;
+    // Предполагаем экран ~1400x800 + запас
     const viewLeft = px - 700 - VIEW_MARGIN;
     const viewRight = px + 700 + VIEW_MARGIN;
     const viewTop = py - 400 - VIEW_MARGIN;
     const viewBottom = py + 400 + VIEW_MARGIN;
 
-    // NPC — статичные данные (color, size, sides) уже известны клиенту
-    // (он получил их один раз при welcome в NPC_SPRITE_CONFIG)
-    // Шлём только динамические данные: id, x, y, type, angle, health, spawnTime
+    // Фильтруем NPC по видимости
     const visibleNpcs = [];
     for (const n of state.npcs) {
       if (n.x >= viewLeft && n.x <= viewRight && n.y >= viewTop && n.y <= viewBottom) {
         visibleNpcs.push({
-          id: n.id, x: n.x, y: n.y, type: n.type,
-          angle: n.angle,
+          id: n.id, x: n.x, y: n.y, type: n.type, color: n.color,
+          size: n.size, sides: n.sides, angle: n.angle,
           health: n.health, maxHealth: n.maxHealth,
           spawnTime: n.spawnTime,
         });
